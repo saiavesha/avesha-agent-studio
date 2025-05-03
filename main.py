@@ -37,71 +37,109 @@
 #     return StreamingResponse(event_stream(results), media_type="text/event-stream")
 
 
+
+
+
 #!/usr/bin/env python3
 import subprocess
 import argparse
 import sys
 from pathlib import Path
+import os
 
 from dotenv import load_dotenv
-import os
+import tiktoken
 
 from agents.test_generator import TestGeneratorAgent
 
+# ─────────────── Token‐based chunking ───────────────
+def chunk_text_by_token(text: str, max_tokens: int, model: str):
+    enc = tiktoken.encoding_for_model(model)
+    token_ids = enc.encode(text)
+    chunks, start = [], 0
+    newline_id = enc.encode("\n")[0]
+    while start < len(token_ids):
+        end = min(start + max_tokens, len(token_ids))
+        # Back up to nearest newline token for clean splits
+        while end < len(token_ids) and token_ids[end] != newline_id:
+            end -= 1
+        if end == start:  # no newline found, just split flat
+            end = min(start + max_tokens, len(token_ids))
+        chunk = enc.decode(token_ids[start:end])
+        chunks.append(chunk)
+        start = end
+    return chunks
+
+# ─────────────── Git diff fetcher ───────────────
 def get_git_diff(pr_number: int, repo_path: Path, remote: str) -> str:
-    """
-    1. Fetch all PR heads from the specified remote into refs/remotes/<remote>/pr/<num>
-    2. Diff remote/main against remote/pr/<pr_number>
-    """
-    # 1. fetch PR refs
     subprocess.run(
         ["git", "fetch", remote, f"+refs/pull/*/head:refs/remotes/{remote}/pr/*"],
-        cwd=repo_path,
-        check=True,
+        cwd=repo_path, check=True
     )
-    # 2. run the diff
     result = subprocess.run(
-        ["git", "diff", f"{remote}/main...{remote}/pr/{pr_number}"],
-        cwd=repo_path,
-        capture_output=True,
-        text=True,
-        check=True,
+        ["git", "diff", f"{remote}/release-1.2.0...{remote}/pr/{pr_number}"],
+        cwd=repo_path, capture_output=True, text=True, check=True
     )
     return result.stdout
 
+# ─────────────── Main ───────────────
 def main():
-    # Load OpenAI key from .env
+    
     load_dotenv()
-    openai_key = os.getenv("OPENAI_API_KEY")
-    if not openai_key:
-        print("Error: set OPENAI_API_KEY in your .env", file=sys.stderr)
-        sys.exit(1)
-    os.environ["OPENAI_API_KEY"] = openai_key
+    # 1) Choose model, fallback logic
+    desired_model = os.getenv("OPENAI_MODEL", "gpt-4")
+    temp = float(os.getenv("MODEL_TEMP", 0.2))
 
-    parser = argparse.ArgumentParser(description="Fetch PR diff & generate tests")
-    parser.add_argument("--pr",        type=int,   required=True,     help="Pull Request number")
-    parser.add_argument("--repo-path", type=Path,  default=".",        help="Path to your local git repo")
-    parser.add_argument("--remote",    type=str,   default="origin",   help="Git remote name")
+    # Test if the desired model exists, else fallback
+    try:
+        TestGeneratorAgent(model=desired_model, temp=temp) \
+            .chain.llm.create(messages=[{"role": "system", "content": "ping"}], max_tokens=1)
+        model = desired_model
+    except InvalidRequestError as e:
+        print(f"⚠️  Model {desired_model!r} not available, falling back to gpt-3.5-turbo")
+        model = "gpt-3.5-turbo"
+
+    os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY", "")
+    agent = TestGeneratorAgent(model=model, temp=temp)
+
+    # 2) Parse args
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--pr",        type=int,   required=True)
+    parser.add_argument("--repo-path", type=Path,  default=".")
+    parser.add_argument("--remote",    type=str,   default="origin")
     args = parser.parse_args()
 
-    # sanity check
     if not (args.repo_path / ".git").exists():
-        print(f"Error: {args.repo_path} is not a git repo", file=sys.stderr)
+        print("Error: not a git repo", file=sys.stderr)
         sys.exit(1)
 
-    # 1. fetch diff
+    # 3) Fetch diff
     diff = get_git_diff(args.pr, args.repo_path, args.remote)
-    print("=== DIFF ===\n", diff)
+    print("Fetched diff:", len(diff), "chars")
 
-    # 2. generate tests
-    agent = TestGeneratorAgent(
-        model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
-        temp=float(os.getenv("MODEL_TEMP", 0.2))
-    )
-    tests_json = agent.generate(diff)
+    # 4) Chunk to avoid context limits
+    # Leave ~500 tokens headroom for prompt + response
+    max_input_tokens = 16000  
+    diff_chunks = chunk_text_by_token(diff, max_input_tokens, model)
 
-    print("\n=== GENERATED TESTS ===\n", tests_json)
+    print(f"– Split into {len(diff_chunks)} chunk(s) for model={model}")
+
+    # 5) Generate tests over each chunk
+    all_results = []
+    for idx, chunk in enumerate(diff_chunks, start=1):
+        print(f"\n>>> Processing chunk {idx}/{len(diff_chunks)} …")
+        try:
+            result = agent.generate(chunk)
+        except InvalidRequestError as err:
+            # If still too big, you could further split or abort
+            print("❌ Chunk too large even after splitting:", err, file=sys.stderr)
+            sys.exit(1)
+        all_results.append(result)
+
+    # 6) Output combined results
+    print("\n=== COMBINED GENERATED TESTS ===")
+    for i, tests in enumerate(all_results, start=1):
+        print(f"\n--- tests from chunk {i} ---\n", tests)
 
 if __name__ == "__main__":
     main()
-
