@@ -1,10 +1,33 @@
-fastapi
-uvicorn
-langchain
-langchain-openai
-python-dotenv
-PyGithub
-duckdb
-pgvector
-lightgbm
-nltk
+
+# ─────────── Core AI & LangChain ───────────
+langchain==0.0.353                  # LLM orchestration & chains
+langchain-openai==0.0.11            # OpenAI chat model integration
+langchain-community==0.0.18         # community I/O, tools & integrations
+openai==1.77.0                      # OpenAI Python SDK
+tiktoken==0.4.0                     # tokenization & chunking
+
+# ─────────── Configuration ───────────
+python-dotenv==1.0.0                # load .env secrets
+
+# ─────────── GitHub Integration ───────────
+PyGithub==2.6.1                     # GitHub API client
+
+# ─────────── Data & RAG Support ───────────
+duckdb==0.8.1                       # analytical store for test runs
+pgvector==0.3.0                     # Postgres vector extension for RAG
+
+# ─────────── ML Model for Flaky-Detection ───────────
+lightgbm==3.4.1                     # fast gradient boosting (flake classifier)
+
+# ─────────── Text Processing ───────────
+nltk==3.8.1                         # BLEU & other NLP utilities
+
+# ─────────── Web Server (optional) ───────────
+fastapi==0.95.1                     # API gateway
+uvicorn==0.23.2                     # ASGI server
+
+# ─────────── Dev & Testing ───────────
+pytest==7.4.0                       # test runner
+pytest-mock==3.10.0                 # mocking support
+black==23.9.1                       # code formatter
+flake8==6.0.0                       # linting

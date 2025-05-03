@@ -77,7 +77,7 @@ def get_git_diff(pr_number: int, repo_path: Path, remote: str) -> str:
         cwd=repo_path, check=True
     )
     result = subprocess.run(
-        ["git", "diff", f"{remote}/release-1.2.0...{remote}/pr/{pr_number}"],
+        ["git", "diff", f"{remote}/main...{remote}/pr/{pr_number}"],
         cwd=repo_path, capture_output=True, text=True, check=True
     )
     return result.stdout
