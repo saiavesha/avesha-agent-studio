@@ -22,8 +22,8 @@ This repository contains a simplified Python prototype for generating pytest tes
 1. **Clone this repo**
 
    ```bash
-   git clone https://github.com/your-org/qa_agent_project.git
-   cd qa_agent_project
+   git clone https://github.com/your-org/avesha-agent-studio.git
+   cd avesha-agent-studio
    ```
 
 2. **Create and activate a virtual environment**
