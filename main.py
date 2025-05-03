@@ -41,70 +41,91 @@
 
 # main.py
 #!/usr/bin/env python3
-import subprocess, argparse, sys, os
+import subprocess
+import argparse
+import sys
+import os
 from pathlib import Path
 from dotenv import load_dotenv
 import tiktoken
-
 from agents.test_generator import TestGeneratorAgent
 
-def get_git_diff(pr: int, repo: Path, remote: str) -> str:
-    subprocess.run(
-        ["git", "fetch", remote, f"+refs/pull/*/head:refs/remotes/{remote}/pr/*"],
-        cwd=repo, check=True
-    )
-    res = subprocess.run(
-        ["git", "diff", f"{remote}/release-1.2.0...{remote}/pr/{pr}"],
-        cwd=repo, capture_output=True, text=True, check=True
-    )
-    return res.stdout
+# Utility: chunk text by token count
 
 def chunk_text_by_token(text: str, max_tokens: int, model: str):
-    enc = tiktoken.encoding_for_model(model)  # tokenizer :contentReference[oaicite:10]{index=10}
-    ids = enc.encode(text)
-    chunks, i = [], 0
+    enc = tiktoken.encoding_for_model(model)
+    token_ids = enc.encode(text)
+    chunks, start = [], 0
     newline_id = enc.encode("\n")[0]
-    while i < len(ids):
-        j = min(i + max_tokens, len(ids))
-        while j < len(ids) and ids[j] != newline_id:
-            j -= 1
-        if j == i:
-            j = min(i + max_tokens, len(ids))
-        chunks.append(enc.decode(ids[i:j]))
-        i = j
+    while start < len(token_ids):
+        end = min(start + max_tokens, len(token_ids))
+        # Back up to newline for clean split
+        while end < len(token_ids) and token_ids[end] != newline_id:
+            end -= 1
+        if end == start:
+            end = min(start + max_tokens, len(token_ids))
+        chunks.append(enc.decode(token_ids[start:end]))
+        start = end
     return chunks
 
+# Fetch diff for a PR
+
+def get_git_diff(pr_number: int, repo_path: Path, remote: str) -> str:
+    subprocess.run(
+        ["git", "fetch", remote, f"+refs/pull/*/head:refs/remotes/{remote}/pr/*"],
+        cwd=repo_path, check=True
+    )
+    result = subprocess.run(
+        ["git", "diff", f"{remote}/release-1.2.0...{remote}/pr/{pr_number}"],
+        cwd=repo_path, capture_output=True, text=True, check=True
+    )
+    return result.stdout
+
+# Main entry point
+
 def main():
-    load_dotenv()  # load OPENAI_API_KEY, OPENAI_MODEL :contentReference[oaicite:11]{index=11}
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--pr", type=int, required=True)
-    parser.add_argument("--repo-path", type=Path, default=".")
-    parser.add_argument("--remote", type=str, default="origin")
+    load_dotenv()
+    # Determine model & temperature
+    model = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
+    temp = float(os.getenv("MODEL_TEMP", 0.2))
+
+    # Parse CLI args
+    parser = argparse.ArgumentParser(description="Fetch PR diff & generate tests")
+    parser.add_argument("--pr", type=int, required=True, help="Pull Request number")
+    parser.add_argument("--repo-path", type=Path, default=".", help="Local git repo path")
+    parser.add_argument("--remote", type=str, default="origin", help="Git remote name")
     args = parser.parse_args()
 
     if not (args.repo_path / ".git").exists():
-        print("Not a git repo", file=sys.stderr); sys.exit(1)
+        print(f"Error: {args.repo_path} is not a git repository", file=sys.stderr)
+        sys.exit(1)
 
-    # 1. fetch diff
+    # Fetch and chunk diff
     diff = get_git_diff(args.pr, args.repo_path, args.remote)
     print(f"Fetched diff ({len(diff)} chars)")
 
-    # 2. chunk to fit model context (e.g. leave headroom) :contentReference[oaicite:12]{index=12}
-    model = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
-    chunks = chunk_text_by_token(diff, max_tokens=1500, model=model)
-    print(f"Split into {len(chunks)} chunk(s) for model {model}")
+    max_tokens = 1500  # leave headroom
+    chunks = chunk_text_by_token(diff, max_tokens, model)
+    print(f"Split into {len(chunks)} chunk(s) for model={model}")
 
-    # 3. invoke agent on each chunk
-    agent = TestGeneratorAgent(model=model, temp=float(os.getenv("MODEL_TEMP", 0.2)))
+    # Initialize agent
+    agent = TestGeneratorAgent(model=model, temp=temp)
     all_tests = []
+
+    # Process each chunk
     for idx, chunk in enumerate(chunks, start=1):
         print(f"▶️ Chunk {idx}/{len(chunks)}")
-        tests = agent.generate(chunk)
-        all_tests.extend(tests)
+        result = agent.generate(chunk)
+        if isinstance(result, list):
+            all_tests.extend(result)
+        else:
+            # Raw fallback
+            print("Raw agent output:\n", result)
 
-    # 4. output combined result
+    # Output combined tests
     print("\n=== GENERATED TESTS ===")
-    print(all_tests)
+    for test in all_tests:
+        print(test)
 
 if __name__ == "__main__":
     main()
