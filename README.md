@@ -22,7 +22,7 @@ This repository contains a simplified Python prototype for generating pytest tes
 1. **Clone this repo**
 
    ```bash
-   git clone https://github.com/your-org/avesha-agent-studio.git
+   git clone https://github.com/saiavesha/avesha-agent-studio.git
    cd avesha-agent-studio
    ```
 
